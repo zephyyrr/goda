@@ -12,83 +12,78 @@ import (
 )
 
 const (
-	Server   = "localhost"
-	Port     = 5432
-	Database = "greenely"
-	User     = "breamio"
-	Password = "Breamhack13"
-	SSL      = "disable"
+	insertBase = "INSERT INTO %s (%s) VALUES (%s);"
 )
 
-type Storer interface {
-	Store(interface{}) error
-	io.Closer
+const (
+	SSLDisable = "disable"
+	SSLRequire = "require"
+)
+
+const (
+	PostgresPort = 5432
+)
+
+type DBConnectData (
+	Server   string
+	Port     int
+	Database string
+	User     string
+	Password string
+	SSL string
+)
+
+type DatabaseAdministrator {
+	*sql.DB
+	storers map[reflect.Type]Storer
 }
 
-var db *sql.DB
-
-func DB() *sql.DB {
-	return db
-}
-
-func init() {
+func NewDatabaseAdministrator(dbcd DBConnectData) (*DatabaseAdministrator, error) {
 	connstring := fmt.Sprintf("host='%s' port='%d' user='%s' password='%s' dbname='%s' sslmode='%s'",
-		Server, Port, User, Password, Database, SSL)
+		dbcd.Server, dbcd.Port, dbcd.User, dbcd.Password, dbcd.Database, dbcd.SSL)
 
 	fmt.Println(connstring)
 
 	var err error
 	db, err = sql.Open("postgres", connstring)
 
-	if err != nil {
-		panic(err)
-	}
+	return &DatabaseAdministrator{db}, err
 }
 
-func GenerateStorer(table string, model interface{}) (Storer, error) {
-	base := "INSERT INTO %s (%s) VALUES (%s);"
-
+func (dba *DatabaseAdministrator) Storer(table string, model interface{}) (Storer, error) {
 	typ := reflect.TypeOf(model)
+	if st, ok := dba.storers[typ]; ok {
+		return st
+	}
+	
 	if typ.Kind() != reflect.Struct {
 		panic(errors.New(fmt.Sprintf("Wrong model type for storer. Expected %s, got %s.", reflect.Struct, typ.Kind())))
 	}
-	
-	columns := []string{}
-	params := []string{}
 
-	mapper := make(map[int]string)
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		var column_name string
-		if tagname := field.Tag.Get("db"); tagname != "" {
-			column_name = tagname
-		} else {
-			column_name = field.Name
-		}
-		columns = append(columns, column_name)
+	columns, mapper := dbfields(typ);
+	params := []string{}
+	for i, _ := range columns {
 		params = append(params, fmt.Sprintf("$%d", i+1))
-		mapper[i] = field.Name
 	}
 
-	query := fmt.Sprintf(base, pq.QuoteIdentifier(table),
-		strings.Join(columns, ", "),
-		strings.Join(params, ", "))
-
+	query := queryBuilder(insertBase, table, columns, params)
 	stmt, err := DB().Prepare(query)
 	
 	if err != nil {
 		return nil, err
 	}
 	
-	return &dbStorer{
+	dba.storers[typ] = &stmtStorer{
 		numArgs: len(params),
 		mapper: mapper,
 		query: query,
 		Stmt: stmt,
 	}, nil
+	
+	return dba.storers[typ]
 }
 
-type dbStorer struct {
+type stmtStorer struct {
 	numArgs int
 	mapper map[int]string
 	query string
@@ -104,8 +99,10 @@ func (s *dbStorer) Store(data interface{}) error {
 		panic(errors.New("Type is not struct or pointer to struct."))
 	}
 	//fmt.Println("storing", val.Type(), data)
+	columns, mapper := dbfields(typ)
+	
 	params := make([]interface{}, 0, s.numArgs)
-	for i := 0; i < s.numArgs; i++ {
+	for i, _ := range mapper {
 		params = append(params, val.FieldByName(s.mapper[i]).Interface())
 	}
 	
@@ -120,4 +117,29 @@ func (s *dbStorer) String() string {
 
 func Close() {
 	db.Close()
+}
+
+func dbfields(reflect.Type typ) ([]string, map[int]string) {
+	fields := []string{}
+
+	mapper := make(map[int]string)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		var column_name string
+		if tagname := field.Tag.Get("db"); tagname != "" {
+			column_name = tagname
+		} else {
+			column_name = field.Name
+		}
+		fields = append(fields, column_name)
+		mapper[i] = field.Name
+	}
+	
+	return fields, mapper
+}
+
+func queryBuilder(base, table string, columns, params []string) {
+	return fmt.Sprintf(base, pq.QuoteIdentifier(table),
+		strings.Join(columns, ", "),
+		strings.Join(params, ", "))
 }
