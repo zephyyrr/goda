@@ -1,96 +1,149 @@
-package dba
+package goda
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"strings"
-	"errors"
-	
+
 	"github.com/lib/pq"
 )
 
 const (
 	insertBase = "INSERT INTO %s (%s) VALUES (%s);"
+	selectBase = "SELECT (%s) FROM %s WHERE %s;"
 )
 
 const (
 	SSLDisable = "disable"
 	SSLRequire = "require"
+	SSLVerify  = "verify-full"
 )
 
 const (
 	PostgresPort = 5432
 )
 
-type DBConnectData (
+type DBConnectData struct {
 	Server   string
 	Port     int
 	Database string
 	User     string
 	Password string
-	SSL string
-)
+	SSL      string
+}
 
-type DatabaseAdministrator {
+func (dbcd DBConnectData) String() string {
+	if dbcd.SSL == "" {
+		dbcd.SSL = SSLRequire
+	}
+	s := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		dbcd.Server,
+		dbcd.Port,
+		dbcd.User,
+		dbcd.Password,
+		dbcd.Database,
+		dbcd.SSL)
+	return s
+}
+
+type DatabaseAdministrator struct {
 	*sql.DB
 	storers map[reflect.Type]Storer
 }
 
 func NewDatabaseAdministrator(dbcd DBConnectData) (*DatabaseAdministrator, error) {
-	connstring := fmt.Sprintf("host='%s' port='%d' user='%s' password='%s' dbname='%s' sslmode='%s'",
-		dbcd.Server, dbcd.Port, dbcd.User, dbcd.Password, dbcd.Database, dbcd.SSL)
+	fmt.Println(dbcd.String())
 
-	fmt.Println(connstring)
+	db, err := sql.Open("postgres", dbcd.String())
+	if err != nil {
+		return nil, err
+	}
+	err = db.Ping() // Make sure connection can be established.
+	return &DatabaseAdministrator{db, make(map[reflect.Type]Storer)}, err
+}
 
-	var err error
-	db, err = sql.Open("postgres", connstring)
-
-	return &DatabaseAdministrator{db}, err
+func (dba *DatabaseAdministrator) Close() {
+	for typ, _ := range dba.storers {
+		delete(dba.storers, typ)
+	}
+	dba.Close()
 }
 
 func (dba *DatabaseAdministrator) Storer(table string, model interface{}) (Storer, error) {
 	typ := reflect.TypeOf(model)
 	if st, ok := dba.storers[typ]; ok {
-		return st
+		return st, nil
 	}
-	
+
 	if typ.Kind() != reflect.Struct {
 		panic(errors.New(fmt.Sprintf("Wrong model type for storer. Expected %s, got %s.", reflect.Struct, typ.Kind())))
 	}
 
-	columns, mapper := dbfields(typ);
+	columns, mapper := dbfields(typ)
 	params := []string{}
 	for i, _ := range columns {
 		params = append(params, fmt.Sprintf("$%d", i+1))
 	}
 
-	query := queryBuilder(insertBase, table, columns, params)
-	stmt, err := DB().Prepare(query)
-	
+	query := fmt.Sprintf(insertBase, pq.QuoteIdentifier(table),
+		strings.Join(columns, ", "),
+		strings.Join(params, ", "))
+
+	// fmt.Println(query)
+	stmt, err := dba.Prepare(query)
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	dba.storers[typ] = &stmtStorer{
-		numArgs: len(params),
 		mapper: mapper,
-		query: query,
-		Stmt: stmt,
+		query:  query,
+		Stmt:   stmt,
+	}
+
+	return dba.storers[typ], nil
+}
+
+func (dba *DatabaseAdministrator) Retriever(table string, model interface{}, keys map[string]interface{}) (Retriever, error) {
+	typ := reflect.TypeOf(model)
+	if typ.Kind() != reflect.Struct {
+		panic(errors.New(fmt.Sprintf("Wrong model type for retriever. Expected %s, got %s.", reflect.Struct, typ.Kind())))
+	}
+
+	columns, mapper := dbfields(typ)
+	params := []string{}
+	for key, val := range keys {
+		params = append(params, fmt.Sprintf("%s=%v", key, val))
+	}
+
+	// Select (fields in model) from table where key=val;
+	query := fmt.Sprintf(selectBase,
+		strings.Join(columns, ", "),
+		pq.QuoteIdentifier(table),
+		strings.Join(params, ", "))
+
+	rows, err := dba.Query(query)
+	if err != nil {
+		return nil, err
+	}
+
+	return &dbRetriever{
+		mapper: mapper,
+		query:  query,
+		Rows:   rows,
 	}, nil
-	
-	return dba.storers[typ]
 }
 
 type stmtStorer struct {
-	numArgs int
 	mapper map[int]string
-	query string
+	query  string
 	*sql.Stmt
 }
 
-func (s *dbStorer) Store(data interface{}) error {
+func (s *stmtStorer) Store(data interface{}) error {
 	val := reflect.ValueOf(data)
 	for val.Type().Kind() == reflect.Ptr {
 		val = val.Elem()
@@ -99,27 +152,57 @@ func (s *dbStorer) Store(data interface{}) error {
 		panic(errors.New("Type is not struct or pointer to struct."))
 	}
 	//fmt.Println("storing", val.Type(), data)
-	columns, mapper := dbfields(typ)
-	
-	params := make([]interface{}, 0, s.numArgs)
-	for i, _ := range mapper {
-		params = append(params, val.FieldByName(s.mapper[i]).Interface())
+	_, mapper := dbfields(val.Type())
+
+	params := make([]interface{}, len(s.mapper), len(s.mapper))
+	for i, fieldName := range mapper {
+		params[i] = val.FieldByName(fieldName).Interface()
 	}
-	
+
 	_, err := s.Exec(params...)
-	
 	return err
 }
 
-func (s *dbStorer) String() string {
+func (s *stmtStorer) String() string {
 	return s.query
 }
 
-func Close() {
-	db.Close()
+type dbRetriever struct {
+	mapper map[int]string
+	query  string
+	*sql.Rows
 }
 
-func dbfields(reflect.Type typ) ([]string, map[int]string) {
+func (r *dbRetriever) Retrieve(data interface{}) error {
+	fields := make([]interface{}, len(r.mapper), len(r.mapper))
+	val := reflect.ValueOf(data)
+	for val.Type().Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+	if val.Type().Kind() != reflect.Struct {
+		panic(errors.New("Type is not struct or pointer to struct."))
+	}
+	
+	for i, fieldName := range r.mapper {
+		fields[i] = val.FieldByName(fieldName).Addr().Interface()
+	}
+
+	if r.Next() {
+		fmt.Printf("%p\n", data)
+		fmt.Println(fields)
+		r.Scan(fields...)
+		fmt.Println(data)
+	} else {
+		return errors.New("End of rows.")
+	}
+	return nil
+}
+
+func (r *dbRetriever) String() string {
+	return r.query
+}
+
+func dbfields(typ reflect.Type) ([]string, map[int]string) {
 	fields := []string{}
 
 	mapper := make(map[int]string)
@@ -129,17 +212,11 @@ func dbfields(reflect.Type typ) ([]string, map[int]string) {
 		if tagname := field.Tag.Get("db"); tagname != "" {
 			column_name = tagname
 		} else {
-			column_name = field.Name
+			column_name = strings.ToLower(field.Name)
 		}
-		fields = append(fields, column_name)
+		fields = append(fields, pq.QuoteIdentifier(column_name))
 		mapper[i] = field.Name
 	}
-	
-	return fields, mapper
-}
 
-func queryBuilder(base, table string, columns, params []string) {
-	return fmt.Sprintf(base, pq.QuoteIdentifier(table),
-		strings.Join(columns, ", "),
-		strings.Join(params, ", "))
+	return fields, mapper
 }
