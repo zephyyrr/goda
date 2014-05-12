@@ -18,7 +18,7 @@ More features is added as I need them.
 	
 ## Roadmap
 	Soon:
-		1. Retreivers
+		1. ~~Retreivers~~
 		2. Formalizing usage
 	
 	Later:
