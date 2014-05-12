@@ -74,6 +74,8 @@ func TestDBARetriever(t *testing.T) {
 	
 	var res testStruct
 	
+	t.Log(&res.Id, &res.Real, &res.Sträng, &res.Timestamp)
+	
 	err = ret.Retrieve(&res)
 	if err != nil {
 		t.Error(err)

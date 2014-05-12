@@ -12,7 +12,7 @@ import (
 
 const (
 	insertBase = "INSERT INTO %s (%s) VALUES (%s);"
-	selectBase = "SELECT (%s) FROM %s WHERE %s;"
+	selectBase = "SELECT %s FROM %s WHERE %s;"
 )
 
 const (
@@ -54,7 +54,7 @@ type DatabaseAdministrator struct {
 }
 
 func NewDatabaseAdministrator(dbcd DBConnectData) (*DatabaseAdministrator, error) {
-	fmt.Println(dbcd.String())
+	// fmt.Println(dbcd.String())
 
 	db, err := sql.Open("postgres", dbcd.String())
 	if err != nil {
@@ -188,13 +188,11 @@ func (r *dbRetriever) Retrieve(data interface{}) error {
 	}
 
 	if r.Next() {
-		fmt.Printf("%p\n", data)
-		fmt.Println(fields)
 		r.Scan(fields...)
-		fmt.Println(data)
 	} else {
 		return errors.New("End of rows.")
 	}
+	
 	return nil
 }
 
