@@ -68,7 +68,7 @@ func (dba *DatabaseAdministrator) Close() {
 	for typ, _ := range dba.storers {
 		delete(dba.storers, typ)
 	}
-	dba.Close()
+	dba.DB.Close()
 }
 
 func (dba *DatabaseAdministrator) Storer(table string, model interface{}) (Storer, error) {
