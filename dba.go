@@ -48,6 +48,10 @@ func LoadEnv(prefix string) (dbcd DBConnectData) {
 	dbcd.SSL = os.Getenv(prefix + "REQUIRESSL")
 }
 
+func LoadPGEnv() DBConnectData {
+	return LoadEnv("PG")
+}
+
 func (dbcd DBConnectData) String() string {
 	if dbcd.SSL == "" {
 		dbcd.SSL = SSLRequire
