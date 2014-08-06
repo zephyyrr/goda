@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
@@ -37,7 +39,7 @@ type DBConnectData struct {
 func LoadEnv(prefix string) (dbcd DBConnectData) {
 	port, err := strconv.Atoi(os.Getenv(prefix + "PORT"))
 	if err != nil {
-		port = goda.PostgresPort
+		port = PostgresPort
 	}
 
 	dbcd.Server = os.Getenv(prefix + "HOST")
@@ -46,6 +48,7 @@ func LoadEnv(prefix string) (dbcd DBConnectData) {
 	dbcd.User = os.Getenv(prefix + "USER")
 	dbcd.Password = os.Getenv(prefix + "PASSWORD")
 	dbcd.SSL = os.Getenv(prefix + "REQUIRESSL")
+	return
 }
 
 func LoadPGEnv() DBConnectData {
