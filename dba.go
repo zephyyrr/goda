@@ -47,7 +47,7 @@ func LoadEnv(prefix string) (dbcd DBConnectData) {
 	dbcd.Database = os.Getenv(prefix + "DATABASE")
 	dbcd.User = os.Getenv(prefix + "USER")
 	dbcd.Password = os.Getenv(prefix + "PASSWORD")
-	dbcd.SSL = os.Getenv(prefix + "REQUIRESSL")
+	dbcd.SSL = os.Getenv(prefix + "SSLMODE")
 	return
 }
 
