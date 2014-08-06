@@ -34,6 +34,20 @@ type DBConnectData struct {
 	SSL      string
 }
 
+func LoadEnv(prefix string) (dbcd DBConnectData) {
+	port, err := strconv.Atoi(os.Getenv(prefix + "PORT"))
+	if err != nil {
+		port = goda.PostgresPort
+	}
+
+	dbcd.Server = os.Getenv(prefix + "HOST")
+	dbcd.Port = port
+	dbcd.Database = os.Getenv(prefix + "DATABASE")
+	dbcd.User = os.Getenv(prefix + "USER")
+	dbcd.Password = os.Getenv(prefix + "PASSWORD")
+	dbcd.SSL = os.Getenv(prefix + "REQUIRESSL")
+}
+
 func (dbcd DBConnectData) String() string {
 	if dbcd.SSL == "" {
 		dbcd.SSL = SSLRequire
@@ -182,7 +196,7 @@ func (r *dbRetriever) Retrieve(data interface{}) error {
 	if val.Type().Kind() != reflect.Struct {
 		panic(errors.New("Type is not struct or pointer to struct."))
 	}
-	
+
 	for i, fieldName := range r.mapper {
 		fields[i] = val.FieldByName(fieldName).Addr().Interface()
 	}
@@ -192,7 +206,7 @@ func (r *dbRetriever) Retrieve(data interface{}) error {
 	} else {
 		return errors.New("End of rows.")
 	}
-	
+
 	return nil
 }
 
